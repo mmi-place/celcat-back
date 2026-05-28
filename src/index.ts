@@ -8,8 +8,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 const CACHE_TTL_SECONDS = parseInt(process.env.CACHE_TTL_SECONDS || "600", 10);
-const CELCAT_BASE_URL = process.env.CELCAT_BASE_URL || "https://celcat.rambouillet.iut-velizy.uvsq.fr";
-const CELCAT_EDT_URL = process.env.CELCAT_EDT_URL || "https://edt.rambouillet.iut-velizy.uvsq.fr";
+const CELCAT_BASE_URL =
+  process.env.CELCAT_BASE_URL ||
+  "https://celcat.rambouillet.iut-velizy.uvsq.fr";
+const CELCAT_EDT_URL =
+  process.env.CELCAT_EDT_URL ||
+  "https://edt.rambouillet.iut-velizy.uvsq.fr";
 
 app.use(cors());
 
@@ -41,7 +45,9 @@ class AppError extends Error {
   constructor(message: string, statusCode: number) {
     super(message);
     this.statusCode = statusCode;
-    if (Error.captureStackTrace) Error.captureStackTrace(this, this.constructor);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -61,7 +67,6 @@ const cache = new NodeCache({ stdTTL: CACHE_TTL_SECONDS });
 // Types
 // ---------------------------------------------------------------------------
 interface CalendarEvent {
-  // Champs rétrocompatibles (attendus par le SDK)
   uid: string;
   summary: string;
   start: string;
@@ -69,7 +74,6 @@ interface CalendarEvent {
   location: string;
   description: string;
 
-  // Champs enrichis (disponibles uniquement via POST)
   eventCategory?: string;
   modules?: string[] | null;
   department?: string;
@@ -101,53 +105,178 @@ interface CelcatPostEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers POST → CalendarEvent
+// Utilitaires
+// ---------------------------------------------------------------------------
+
+function decodeHtml(str: string): string {
+  if (!str) return "";
+  return str.replace(/&#39;/g, "'");
+}
+
+// ---------------------------------------------------------------------------
+// Analyseur POST Celcat (normalisation)
+// ---------------------------------------------------------------------------
+
+// Découpe description en prof / groupe / salles / bloc module éventuel
+function parseCelcatDescription(ev: CelcatPostEvent) {
+  const parts = ev.description
+    .split("<br />")
+    .map((p) => p.replace(/\r\n/g, "").trim())
+    .filter(Boolean);
+
+  const teacher = parts[0] || "Inconnu";
+  const group = parts[1] || "Tous";
+
+  const siteCount = Array.isArray(ev.sites) ? ev.sites.length : 0;
+  const roomStartIndex = 2;
+  const roomEndIndex = roomStartIndex + siteCount;
+
+  const rooms = parts.slice(roomStartIndex, roomEndIndex);
+  const room = rooms.join(" / ") || "";
+
+  const moduleIndex = roomEndIndex;
+  const moduleBlock = parts[moduleIndex] || "";
+
+  return {
+    teacher,
+    group,
+    rooms,
+    room,
+    moduleBlock,
+  };
+}
+
+// Extraction moduleCode / codeSimplifier / moduleLabel / summary à partir du bloc module
+function parseModuleFromBlock(moduleBlock: string) {
+  if (!moduleBlock) {
+    return {
+      moduleCode: "",
+      codeSimplifier: "",
+      moduleLabel: "",
+      summary: "",
+    };
+  }
+
+  const codeMatch = moduleBlock.match(/\[(.*?)\]/);
+  const moduleCode = codeMatch ? codeMatch[1] : "";
+
+  let withoutCode = moduleBlock.replace(/\s*\[.*?\]\s*$/, "").trim();
+  withoutCode = decodeHtml(withoutCode);
+
+  let codeSimplifier = "";
+  let summary = "";
+  let moduleLabel = "";
+
+  const parts = withoutCode.split(" - ");
+  if (parts.length >= 2) {
+    codeSimplifier = parts[0].trim();
+    summary = parts.slice(1).join(" - ").trim();
+    moduleLabel = `${codeSimplifier} - ${summary}`;
+  } else {
+    summary = withoutCode;
+    moduleLabel = withoutCode;
+  }
+
+  return {
+    moduleCode,
+    codeSimplifier,
+    moduleLabel,
+    summary,
+  };
+}
+
+// Fonction unique de normalisation
+function normalizeEvent(ev: CelcatPostEvent) {
+  const descInfo = parseCelcatDescription(ev);
+  const moduleInfo = parseModuleFromBlock(descInfo.moduleBlock);
+
+  let moduleCode = moduleInfo.moduleCode;
+  if (ev.modules && ev.modules.length) {
+    moduleCode = ev.modules[0];
+  }
+
+  return {
+    teacher: descInfo.teacher,
+    group: descInfo.group,
+    room: descInfo.room, // "E57 - VEL" ou "E57 - VEL / I22 - VEL"
+    moduleCode, // "MM2R18" / "MM2SA02" / ""
+    codeSimplifier: moduleInfo.codeSimplifier, // "R218"
+    moduleLabel: moduleInfo.moduleLabel, // "R218 - Economie..."
+    summaryLabel: moduleInfo.summary, // "Economie et Droit du numerique"
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers POST → CalendarEvent (rétrocompat SDK)
 // ---------------------------------------------------------------------------
 
 /**
- * Reconstruit un summary rétrocompat "MODULE - Nom\; Type"
- * à partir des champs structurés du POST.
+ * SUMMARY iCal-like :
+ * - "MODULE - Libellé\; Type" si moduleLabel existe
+ * - "Catégorie" seule sinon (ex: "projet tutore")
  */
 function buildSummary(event: CelcatPostEvent): string {
-  // La description POST ressemble à :
-  // "PROF Nom\r\n\r\n<br />\r\n\r\nGROUPE\r\n\r\n<br />\r\n\r\nSALLE\r\n\r\n<br />\r\n\r\nMODULE - Libellé [CODE]\r\n"
-  const parts = event.description.split("<br />");
-  const moduleRaw = parts[3]?.replace(/\r\n/g, "").trim() ?? "";
-  // Retirer le code entre crochets : "R218 - Economie [MM2R18]" → "R218 - Economie"
-  const moduleClean = moduleRaw.replace(/\s*\[.*?\]\s*$/, "").trim();
+  const meta = normalizeEvent(event);
+  const category = (event.eventCategory || "").trim();
 
-  if (!moduleClean) {
-    // Pas de module (ex: projet tutoré sans module)
-    return `inconnu\\; ${event.eventCategory}`;
+  // Cas général : moduleLabel dispo → "MODULE - Libellé\; Type"
+  if (meta.moduleLabel) {
+    return `${meta.moduleLabel}\\; ${category || ""}`.trim();
   }
 
-  return `${moduleClean}\\; ${event.eventCategory}`;
+  // Pas de moduleLabel mais summaryLabel → "Summary\; Type"
+  if (meta.summaryLabel) {
+    return `${meta.summaryLabel}\\; ${category || ""}`.trim();
+  }
+
+  // Pas de libellé de module : utiliser la catégorie seule (ex: "projet tutore")
+  if (category) {
+    return category;
+  }
+
+  // Fallback
+  return `inconnu\\; ${event.eventCategory || "Type inconnu"}`;
 }
 
 /**
- * Reconstruit une description rétrocompat "PROF Nom\; GROUPE\n\nEvent id: X"
+ * DESCRIPTION iCal-like :
+ * "PROF(s); GROUPE\n\nEvent id: X, Register id: N/A"
  */
 function buildDescription(event: CelcatPostEvent): string {
-  const parts = event.description.split("<br />");
-  const teacher = parts[0]?.replace(/\r\n/g, "").trim() ?? "";
-  const group = parts[1]?.replace(/\r\n/g, "").trim() ?? "";
-  const eventId = event.id.split(":")[3] ?? event.id;
+  const meta = normalizeEvent(event);
+  const eventId = event.id.split(":")[3] || event.id;
+  const registerId = "N/A"; // placeholder, Celcat POST ne donne pas Register id
 
-  return `${teacher}\\; ${group}\\n\\nEvent id: ${eventId}`;
+  const teacherPart = meta.teacher;
+  const groupPart = meta.group;
+
+  return `${teacherPart}\\; ${groupPart}\\n\\nEvent id: ${eventId}, Register id: ${registerId}`;
 }
 
 /**
- * Reconstruit une location rétrocompat "SALLE - VEL"
- * à partir de la description POST (3ème segment).
+ * LOCATION iCal-like :
+ * "SALLE - VEL" ou "SALLE1 - VEL; SALLE2 - VEL"
  */
 function buildLocation(event: CelcatPostEvent): string {
   const parts = event.description.split("<br />");
-  return parts[2]?.replace(/\r\n/g, "").trim() ?? "";
+
+  const rawRooms = (parts[2] || "")
+    .split(/\r\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const roomCount =
+    Array.isArray(event.sites) && event.sites.length > 0
+      ? event.sites.length
+      : rawRooms.length;
+
+  const rooms = rawRooms.slice(0, roomCount);
+
+  return rooms.join("; ") || "";
 }
 
 function postEventToCalendarEvent(event: CelcatPostEvent): CalendarEvent {
   return {
-    // Rétrocompat
     uid: event.id,
     summary: buildSummary(event),
     start: event.start,
@@ -155,7 +284,6 @@ function postEventToCalendarEvent(event: CelcatPostEvent): CalendarEvent {
     location: buildLocation(event),
     description: buildDescription(event),
 
-    // Enrichis
     eventCategory: event.eventCategory,
     modules: event.modules,
     department: event.department,
@@ -170,7 +298,11 @@ function postEventToCalendarEvent(event: CelcatPostEvent): CalendarEvent {
 // ---------------------------------------------------------------------------
 // Stratégie POST
 // ---------------------------------------------------------------------------
-async function fetchViaPost(federationId: string, start: string, end: string): Promise<CalendarEvent[]> {
+async function fetchViaPost(
+  federationId: string,
+  start: string,
+  end: string
+): Promise<CalendarEvent[]> {
   const cacheKey = `post_${federationId}_${start}_${end}`;
   const cached = cache.get<CalendarEvent[]>(cacheKey);
   if (cached) return cached;
@@ -185,7 +317,9 @@ async function fetchViaPost(federationId: string, start: string, end: string): P
 
   const response = await fetch(`${CELCAT_EDT_URL}/Home/GetCalendarData`, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+    },
     body,
   });
 
@@ -195,9 +329,11 @@ async function fetchViaPost(federationId: string, start: string, end: string): P
 
   const raw: CelcatPostEvent[] = (await response.json()) as CelcatPostEvent[];
   const events = raw
-    .filter((e) => !e.allDay) // exclure jours fériés (garder si souhaité)
+    .filter((e) => !e.allDay)
     .map(postEventToCalendarEvent)
-    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    .sort(
+      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
+    );
 
   cache.set(cacheKey, events);
   return events;
@@ -214,14 +350,24 @@ function dateToYyyymmdd(date: Date | undefined): number {
   return parseInt(`${y}${m}${d}`);
 }
 
-async function fetchViaIcal(groupId: string, startDate: Date, endDate?: Date): Promise<CalendarEvent[]> {
+async function fetchViaIcal(
+  groupId: string,
+  startDate: Date,
+  endDate?: Date
+): Promise<CalendarEvent[]> {
   const cacheKey = `ical_${groupId}`;
   let icalData = cache.get<string>(cacheKey);
 
   if (!icalData) {
-    const response = await fetch(`${CELCAT_BASE_URL}/cal/ical/${groupId}/schedule.ics`);
+    const response = await fetch(
+      `${CELCAT_BASE_URL}/cal/ical/${groupId}/schedule.ics`
+    );
     if (!response.ok) {
-      if (response.status === 404) throw new ClientError(`No schedule found for group ID: ${groupId}`, 404);
+      if (response.status === 404)
+        throw new ClientError(
+          `No schedule found for group ID: ${groupId}`,
+          404
+        );
       throw new AppError(`iCal fetch failed. Status: ${response.status}`, 502);
     }
     icalData = await response.text();
@@ -250,7 +396,9 @@ async function fetchViaIcal(groupId: string, startDate: Date, endDate?: Date): P
       const n = dateToYyyymmdd(new Date(e.start));
       return n >= startN && n <= endN;
     })
-    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    .sort(
+      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
+    );
 
   return events;
 }
@@ -258,45 +406,53 @@ async function fetchViaIcal(groupId: string, startDate: Date, endDate?: Date): P
 // ---------------------------------------------------------------------------
 // Route principale
 // ---------------------------------------------------------------------------
-app.get("/edt/:groupId", async (req: Request, res: Response, next: NextFunction) => {
-  const { groupId } = req.params;
-  const { start, end } = req.query;
+app.get(
+  "/edt/:groupId",
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { groupId } = req.params;
+    const { start, end } = req.query;
 
-  if (!start) return next(new ClientError("Missing 'start' query parameter."));
+    if (!start)
+      return next(new ClientError("Missing 'start' query parameter."));
 
-  const startDate = new Date(start.toString());
-  if (isNaN(startDate.getTime())) return next(new ClientError("Invalid 'start' date format."));
+    const startDate = new Date(start.toString());
+    if (isNaN(startDate.getTime()))
+      return next(new ClientError("Invalid 'start' date format."));
 
-  const endDate = end ? new Date(end.toString()) : undefined;
-  if (end && isNaN(endDate!.getTime())) return next(new ClientError("Invalid 'end' date format."));
+    const endDate = end ? new Date(end.toString()) : undefined;
+    if (end && isNaN(endDate!.getTime()))
+      return next(new ClientError("Invalid 'end' date format."));
 
-  const startStr = start.toString().split("T")[0]!;
-  const endStr = end ? end.toString().split("T")[0]! : startStr;
+    const startStr = start.toString().split("T")[0]!;
+    const endStr = end ? end.toString().split("T")[0]! : startStr;
 
-  const federationId = GROUP_TO_FEDERATION[groupId];
+    const federationId = GROUP_TO_FEDERATION[groupId];
 
-  try {
-    if (federationId) {
-      try {
-        console.log(`[POST] Fetching ${groupId} (${federationId})`);
-        const events = await fetchViaPost(federationId, startStr, endStr);
-        return res.status(200).json(events);
-      } catch (postError) {
-        // POST a échoué → fallback iCal
-        console.warn(`[POST] Failed for ${groupId}, falling back to iCal. Error: ${postError}`);
+    try {
+      if (federationId) {
+        try {
+          console.log(`[POST] Fetching ${groupId} (${federationId})`);
+          const events = await fetchViaPost(federationId, startStr, endStr);
+          return res.status(200).json(events);
+        } catch (postError) {
+          console.warn(
+            `[POST] Failed for ${groupId}, falling back to iCal. Error: ${postError}`
+          );
+        }
+      } else {
+        console.warn(
+          `[MAP] No federationId for "${groupId}", using iCal directly.`
+        );
       }
-    } else {
-      console.warn(`[MAP] No federationId for "${groupId}", using iCal directly.`);
-    }
 
-    // Fallback iCal (aussi utilisé si groupId non mappé = ancien ID iCal direct)
-    console.log(`[iCal] Fetching ${groupId}`);
-    const events = await fetchViaIcal(groupId, startDate, endDate);
-    return res.status(200).json(events);
-  } catch (error) {
-    next(error);
+      console.log(`[iCal] Fetching ${groupId}`);
+      const events = await fetchViaIcal(groupId, startDate, endDate);
+      return res.status(200).json(events);
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 // ---------------------------------------------------------------------------
 // Ping
@@ -308,14 +464,20 @@ app.post("/ping", (_req, res) => {
 // ---------------------------------------------------------------------------
 // Error handler
 // ---------------------------------------------------------------------------
-app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-  if (err instanceof AppError) {
-    console.error(`[${req.method} ${req.path}] AppError ${err.statusCode}: ${err.message}`);
-    return res.status(err.statusCode).json({ error: err.message });
+app.use(
+  (err: Error, req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof AppError) {
+      console.error(
+        `[${req.method} ${req.path}] AppError ${err.statusCode}: ${err.message}`
+      );
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error(err.stack);
+    res
+      .status(500)
+      .json({ error: "An unexpected internal server error occurred." });
   }
-  console.error(err.stack);
-  res.status(500).json({ error: "An unexpected internal server error occurred." });
-});
+);
 
 // ---------------------------------------------------------------------------
 app.listen(port, () => {
