@@ -136,14 +136,14 @@ function parseCelcatDescription(ev: CelcatPostEvent) {
   const teacherPartsRaw = firstBlock
     .split("<br />")
     .map((p) => p.trim())
-    .filter((p) => p.length > 0 && !/^\(\d+\s+suite/i.test(p)); // on vire "(1 suite...)"
+    .filter((p) => p.length > 0);
   const teacherCount = teacherPartsRaw.length;
 
   // 3) On repart de la description complète, cette fois en splitant sur "<br />"
   const parts = desc
     .split("<br />")
     .map((p) => p.replace(/\r\n/g, "").trim())
-    .filter((p) => p.length > 0 && !/^\(\d+\s+suite/i.test(p)); // on enlève aussi "(1 suite...)" ici
+    .filter((p) => p.length > 0);
 
   // 4) Profs = les `teacherCount` premières lignes
   const teacherParts = parts.slice(0, teacherCount);
