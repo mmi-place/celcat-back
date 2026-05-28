@@ -126,23 +126,51 @@ function decodeHtml(str: string): string {
 
 // Découpe description en prof / groupe / salles / bloc module éventuel
 function parseCelcatDescription(ev: CelcatPostEvent) {
-  const parts = ev.description
+  const desc = ev.description ?? "";
+
+  // 1) On split sur "\r\n" pour récupérer le premier bloc
+  const rnBlocks = desc.split("\r\n");
+  const firstBlock = rnBlocks[0] ?? "";
+
+  // 2) Dans ce premier bloc, on compte le nombre de "<br />"
+  const teacherPartsRaw = firstBlock
+    .split("<br />")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && !/^\(\d+\s+suite/i.test(p)); // on vire "(1 suite...)"
+  const teacherCount = teacherPartsRaw.length;
+
+  // 3) On repart de la description complète, cette fois en splitant sur "<br />"
+  const parts = desc
     .split("<br />")
     .map((p) => p.replace(/\r\n/g, "").trim())
-    .filter(Boolean);
+    .filter((p) => p.length > 0 && !/^\(\d+\s+suite/i.test(p)); // on enlève aussi "(1 suite...)" ici
 
-  const teacher = parts[0] || "Inconnu";
-  const group = parts[1] || "Tous";
+  // 4) Profs = les `teacherCount` premières lignes
+  const teacherParts = parts.slice(0, teacherCount);
+  const lastTeacherIndex = teacherParts.length - 1;
+  if (lastTeacherIndex >= 0) {
+    const moreMatch = teacherParts[lastTeacherIndex].match(/^\((\d+)\s+more\.\.\.\)$/i);
+    if (moreMatch) {
+      teacherParts[lastTeacherIndex] = `${moreMatch[1]} autres`;
+    }
+  }
+  const teacher = teacherParts.join("; ") || "Inconnu";
 
+  // 5) Groupe = ligne suivante (si elle existe)
+  const groupIndex = teacherCount;
+  const group = parts[groupIndex] ?? "Tous";
+
+  // 6) Salles = lignes après le groupe, en fonction de sites.length
   const siteCount = Array.isArray(ev.sites) ? ev.sites.length : 0;
-  const roomStartIndex = 2;
+  const roomStartIndex = groupIndex + 1;
   const roomEndIndex = roomStartIndex + siteCount;
 
   const rooms = parts.slice(roomStartIndex, roomEndIndex);
   const room = rooms.join(" / ") || "";
 
+  // 7) ModuleBlock = ligne juste après les salles (facultatif)
   const moduleIndex = roomEndIndex;
-  const moduleBlock = parts[moduleIndex] || "";
+  const moduleBlock = parts[moduleIndex] ?? "";
 
   return {
     teacher,
