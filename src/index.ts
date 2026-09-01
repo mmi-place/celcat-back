@@ -9,7 +9,7 @@ const port = process.env.PORT || 5000;
 
 const CACHE_TTL_SECONDS = parseInt(process.env.CACHE_TTL_SECONDS || "600", 10);
 const CELCAT_BASE_URL = process.env.CELCAT_BASE_URL || "https://celcat.rambouillet.iut-velizy.uvsq.fr";
-const CELCAT_EDT_URL = process.env.CELCAT_EDT_URL || "https://edt.rambouillet.iut-velizy.uvsq.fr";
+const CELCAT_EDT_URL = process.env.CELCAT_EDT_URL || "https://edt.iut-velizy.uvsq.fr";
 
 app.use(cors());
 
