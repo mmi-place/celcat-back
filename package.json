@@ -1,7 +1,7 @@
 {
   "name": "celcat-back",
   "version": "1.0.0",
-  "description": "serveur proxy pour récupérer les données depuis celcat",
+  "description": "Proxy API pour récupérer et normaliser les emplois du temps Celcat",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -11,17 +11,19 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/okayhappex/celcat-back.git"
+    "url": "git+https://github.com/mmi-place/celcat-back.git"
   },
   "keywords": [
-    "celcat"
+    "celcat",
+    "ical",
+    "timetable"
   ],
-  "author": "happex",
+  "author": "mmi-place",
   "license": "GPL-3.0",
   "bugs": {
-    "url": "https://github.com/okayhappex/celcat-back/issues"
+    "url": "https://github.com/mmi-place/celcat-back/issues"
   },
-  "homepage": "https://github.com/okayhappex/celcat-back#readme",
+  "homepage": "https://github.com/mmi-place/celcat-back#readme",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
@@ -32,8 +34,8 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/ical": "^0.8.3",
-    "typescript": "^5.9.3",
+    "nodemon": "^3.1.4",
     "ts-node": "^10.9.2",
-    "nodemon": "^3.1.4"
+    "typescript": "^5.9.3"
   }
 }
