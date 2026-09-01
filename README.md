@@ -1,123 +1,108 @@
-# Celcat Back - Proxy API
+# Celcat Back
 
-`celcat-back` est un serveur proxy simple et efficace conçu pour récupérer les emplois du temps depuis un serveur Celcat, les mettre en cache et les exposer via une API JSON propre.
+API Express/TypeScript qui récupère les emplois du temps Celcat, normalise les événements et met les réponses en cache.
 
-## ✨ Fonctionnalités
+## Fonctionnement
 
--   **Proxy pour Celcat** : Récupère les données iCalendar (`.ics`) depuis n'importe quelle instance Celcat.
--   **Mise en Cache Intelligente** : Intègre un cache en mémoire pour réduire la charge sur le serveur Celcat et accélérer les réponses.
--   **API JSON Claire** : Transforme les données iCal en un format JSON facile à utiliser.
--   **Filtrage par Date** : Permet de requêter des événements pour une période spécifique.
--   **Gestion des Erreurs** : Fournit des messages d'erreur clairs pour les requêtes invalides ou les problèmes serveur.
--   **Configurable** : Utilise des variables d'environnement pour une configuration flexible.
--   **Prêt pour Docker** : Livré avec un `Dockerfile` pour un déploiement facile et reproductible.
+Pour les groupes connus, l’API interroge d’abord l’endpoint JSON Celcat. Si cette requête échoue, ou si le groupe n’est pas référencé, elle utilise automatiquement le flux iCal comme solution de secours.
 
----
+## Prérequis
 
-## 🚀 Démarrage Rapide
+- Node.js 20 ou une version supérieure
+- npm
+- Docker, uniquement pour construire ou exécuter l’image
 
-### Prérequis
+## Développement
 
--   Node.js (v18 ou supérieure)
--   Docker (Optionnel, pour le déploiement)
+```bash
+git clone https://github.com/mmi-place/celcat-back.git
+cd celcat-back
+cp .env.example .env
+npm ci
+npm run dev
+```
 
-### Installation et Développement Local
+Le serveur écoute par défaut sur [http://localhost:5000](http://localhost:5000).
 
-1.  **Clonez le dépôt :**
-    ```bash
-    git clone https://github.com/okayhappex/celcat-back.git
-    cd celcat-back
-    ```
+Pour vérifier la compilation TypeScript :
 
-2.  **Installez les dépendances :**
-    ```bash
-    npm install
-    ```
+```bash
+npm run build
+npm start
+```
 
-3.  **Lancez le serveur de développement :**
-    Ce script utilise `nodemon` pour redémarrer automatiquement le serveur à chaque modification.
-    ```bash
-    npm run dev
-    ```
-    Le serveur sera accessible à l'adresse `http://localhost:5000`.
+## Configuration
 
----
+| Variable | Valeur par défaut | Utilisation |
+| --- | --- | --- |
+| `PORT` | `5000` | Port HTTP de l’API |
+| `CACHE_TTL_SECONDS` | `600` | Durée du cache en secondes |
+| `CELCAT_EDT_URL` | `https://edt.iut-velizy.uvsq.fr` | Endpoint JSON Celcat principal |
+| `CELCAT_BASE_URL` | `https://celcat.rambouillet.iut-velizy.uvsq.fr` | Endpoint iCal utilisé en secours |
 
-## 🐳 Déploiement avec Docker
+`CELCAT_EDT_URL` et `CELCAT_BASE_URL` ciblent deux services différents. Elles ne doivent pas nécessairement avoir la même valeur.
 
-1.  **Construisez l'image Docker :**
-    ```bash
-    docker build -t celcat-back .
-    ```
-
-2.  **Lancez le conteneur :**
-    Vous pouvez configurer l'application en passant des variables d'environnement.
-    ```bash
-    docker run -d -p 5000:5000 --name celcat-proxy \
-      -e PORT=5000 \
-      -e CACHE_TTL_SECONDS=600 \
-      -e CELCAT_BASE_URL="https://celcat.rambouillet.iut-velizy.uvsq.fr" \
-      celcat-back
-    ```
-
----
-
-## ⚙️ Configuration
-
-L'application est configurable via les variables d'environnement suivantes :
-
-| Variable            | Description                                                              | Défaut                                                 |
-| ------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------ |
-| `PORT`              | Le port sur lequel le serveur écoute.                                    | `5000`                                                 |
-| `CACHE_TTL_SECONDS` | La durée de vie du cache en secondes.                                    | `600` (10 minutes)                                     |
-| `CELCAT_BASE_URL`   | L'URL de base de l'instance Celcat à requêter.                           | `https://celcat.rambouillet.iut-velizy.uvsq.fr`         |
-
----
-
-## 📖 Documentation de l'API
+## API
 
 ### `GET /edt/:groupId`
 
-Récupère l'emploi du temps pour un groupe spécifique.
+Paramètres :
 
-#### Paramètres
+| Paramètre | Emplacement | Requis | Format |
+| --- | --- | --- | --- |
+| `groupId` | chemin | oui | identifiant Celcat |
+| `start` | requête | oui | `YYYY-MM-DD` |
+| `end` | requête | non | `YYYY-MM-DD` |
 
--   **`groupId`** (paramètre de chemin, requis) : L'identifiant du groupe Celcat (ex: `133`).
--   **`start`** (paramètre de requête, requis) : La date de début de la période souhaitée, au format `YYYY-MM-DD`.
--   **`end`** (paramètre de requête, optionnel) : La date de fin de la période. Si non fournie, la recherche s'étend sur 5 jours après la date de début.
-
-#### Exemple de Requête
+Exemple :
 
 ```bash
-curl "http://localhost:5000/edt/133?start=2024-09-02&end=2024-09-08"
+curl "http://localhost:5000/edt/G1-QJ2DMFYC5987?start=2026-09-01&end=2026-09-07"
 ```
 
-#### Exemple de Réponse (Succès `200 OK`)
+La réponse est un tableau JSON d’événements triés par date.
 
-```json
-[
-    {
-        "uid": "...",
-        "summary": "R1.01 - Initiation au développement",
-        "start": "2024-09-02T08:00:00.000Z",
-        "end": "2024-09-02T10:00:00.000Z",
-        "location": "Amphi WEISS",
-        "description": "..."
-    },
-    ...
-]
+### `POST /ping`
+
+Retourne `pong` et peut servir à vérifier que le serveur répond.
+
+```bash
+curl -X POST http://localhost:5000/ping
 ```
 
-#### Exemple de Réponse (Erreur `400 Bad Request`)
+## Docker
 
-```json
-{
-    "error": "Missing 'start' query parameter."
-}
+Construire l’image localement :
+
+```bash
+docker build -t celcat-back .
+docker run --rm -p 5000:5000 --env-file .env celcat-back
 ```
 
----
+L’image construite par GitHub Actions est disponible sous :
 
-## 📜 Licence
+```text
+ghcr.io/mmi-place/celcat-back:latest
+```
 
-Ce projet est sous licence GPL-3.0.
+Pour l’exécuter :
+
+```bash
+docker pull ghcr.io/mmi-place/celcat-back:latest
+docker run --rm -p 5000:5000 --env-file .env ghcr.io/mmi-place/celcat-back:latest
+```
+
+## Intégration continue
+
+Le workflow GitHub Actions :
+
+- construit l’image sur les pull requests vers `main` ;
+- publie les architectures `linux/amd64` et `linux/arm64` après un push sur `main` ;
+- publie également les tags Git commençant par `v` ;
+- utilise le cache GitHub Actions pour accélérer les builds.
+
+Aucun secret personnalisé n’est requis. La publication dans GHCR utilise le `GITHUB_TOKEN` du dépôt.
+
+## Licence
+
+Ce projet est distribué sous licence [GPL-3.0](LICENSE.md).
