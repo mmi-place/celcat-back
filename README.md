@@ -94,14 +94,13 @@ docker run --rm -p 5000:5000 --env-file .env ghcr.io/mmi-place/celcat-back:lates
 
 ## Intégration continue
 
-Le workflow GitHub Actions :
+Le workflow GitHub Actions publie systématiquement une image multiarchitecture `linux/amd64` et `linux/arm64` :
 
-- construit l’image sur les pull requests vers `main` ;
-- publie les architectures `linux/amd64` et `linux/arm64` après un push sur `main` ;
-- publie également les tags Git commençant par `v` ;
-- utilise le cache GitHub Actions pour accélérer les builds.
+- après chaque push sur `main` ;
+- pour chaque tag Git commençant par `v` ;
+- lors d’un lancement manuel du workflow.
 
-Aucun secret personnalisé n’est requis. La publication dans GHCR utilise le `GITHUB_TOKEN` du dépôt.
+Il utilise le cache GitHub Actions pour accélérer les builds. Aucun secret personnalisé n’est requis : la publication dans GHCR utilise le `GITHUB_TOKEN` du dépôt.
 
 ## Licence
 
