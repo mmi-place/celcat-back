@@ -1,12 +1,13 @@
-# Ignorer les modules Node.js locaux, ils seront installés dans le conteneur
 node_modules
-
-# Ignorer le dossier de compilation TypeScript, il sera généré dans le conteneur
 dist
+coverage
 
-# Ignorer les fichiers de configuration de l'environnement local
 .env
+.env.*
+!.env.example
 
-# Ignorer les fichiers Git
 .git
+.github
 .gitignore
+
+npm-debug.log*
