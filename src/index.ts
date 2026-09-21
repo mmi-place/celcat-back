@@ -8,8 +8,11 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 const CACHE_TTL_SECONDS = parseInt(process.env.CACHE_TTL_SECONDS || "600", 10);
-const CELCAT_BASE_URL = process.env.CELCAT_BASE_URL || "https://celcat.rambouillet.iut-velizy.uvsq.fr";
-const CELCAT_EDT_URL = process.env.CELCAT_EDT_URL || "https://edt.iut-velizy.uvsq.fr";
+const CELCAT_BASE_URL =
+  process.env.CELCAT_BASE_URL ||
+  "https://celcat.rambouillet.iut-velizy.uvsq.fr";
+const CELCAT_EDT_URL =
+  process.env.CELCAT_EDT_URL || "https://edt.iut-velizy.uvsq.fr";
 
 app.use(cors());
 
@@ -160,7 +163,12 @@ interface CelcatPostEvent {
 
 function decodeHtml(str: string): string {
   if (!str) return "";
-  return str.replace(/&#39;/g, "'");
+  return str
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +200,9 @@ function parseCelcatDescription(ev: CelcatPostEvent) {
   const teacherParts = parts.slice(0, teacherCount);
   const lastTeacherIndex = teacherParts.length - 1;
   if (lastTeacherIndex >= 0) {
-    const moreMatch = teacherParts[lastTeacherIndex].match(/^\((\d+)\s+more\.\.\.\)$/i);
+    const moreMatch = teacherParts[lastTeacherIndex].match(
+      /^\((\d+)\s+more\.\.\.\)$/i,
+    );
     if (moreMatch) {
       teacherParts[lastTeacherIndex] = `${moreMatch[1]} autres`;
     }
@@ -343,7 +353,10 @@ function buildLocation(event: CelcatPostEvent): string {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  const roomCount = Array.isArray(event.sites) && event.sites.length > 0 ? event.sites.length : rawRooms.length;
+  const roomCount =
+    Array.isArray(event.sites) && event.sites.length > 0
+      ? event.sites.length
+      : rawRooms.length;
 
   const rooms = rawRooms.slice(0, roomCount);
 
@@ -386,7 +399,11 @@ function postEventToCalendarEvent(event: CelcatPostEvent): CalendarEvent {
 // ---------------------------------------------------------------------------
 // Stratégie POST
 // ---------------------------------------------------------------------------
-async function fetchViaPost(federationId: string, start: string, end: string): Promise<CalendarEvent[]> {
+async function fetchViaPost(
+  federationId: string,
+  start: string,
+  end: string,
+): Promise<CalendarEvent[]> {
   const cacheKey = `post_${federationId}_${start}_${end}`;
   const cached = cache.get<CalendarEvent[]>(cacheKey);
   if (cached) return cached;
@@ -432,14 +449,24 @@ function dateToYyyymmdd(date: Date | undefined): number {
   return parseInt(`${y}${m}${d}`);
 }
 
-async function fetchViaIcal(groupId: string, startDate: Date, endDate?: Date): Promise<CalendarEvent[]> {
+async function fetchViaIcal(
+  groupId: string,
+  startDate: Date,
+  endDate?: Date,
+): Promise<CalendarEvent[]> {
   const cacheKey = `ical_${groupId}`;
   let icalData = cache.get<string>(cacheKey);
 
   if (!icalData) {
-    const response = await fetch(`${CELCAT_BASE_URL}/cal/ical/${groupId}/schedule.ics`);
+    const response = await fetch(
+      `${CELCAT_BASE_URL}/cal/ical/${groupId}/schedule.ics`,
+    );
     if (!response.ok) {
-      if (response.status === 404) throw new ClientError(`No schedule found for group ID: ${groupId}`, 404);
+      if (response.status === 404)
+        throw new ClientError(
+          `No schedule found for group ID: ${groupId}`,
+          404,
+        );
       throw new AppError(`iCal fetch failed. Status: ${response.status}`, 502);
     }
     icalData = await response.text();
@@ -476,43 +503,53 @@ async function fetchViaIcal(groupId: string, startDate: Date, endDate?: Date): P
 // ---------------------------------------------------------------------------
 // Route principale
 // ---------------------------------------------------------------------------
-app.get("/edt/:groupId", async (req: Request, res: Response, next: NextFunction) => {
-  const { groupId } = req.params;
-  const { start, end } = req.query;
+app.get(
+  "/edt/:groupId",
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { groupId } = req.params;
+    const { start, end } = req.query;
 
-  if (!start) return next(new ClientError("Missing 'start' query parameter."));
+    if (!start)
+      return next(new ClientError("Missing 'start' query parameter."));
 
-  const startDate = new Date(start.toString());
-  if (isNaN(startDate.getTime())) return next(new ClientError("Invalid 'start' date format."));
+    const startDate = new Date(start.toString());
+    if (isNaN(startDate.getTime()))
+      return next(new ClientError("Invalid 'start' date format."));
 
-  const endDate = end ? new Date(end.toString()) : undefined;
-  if (end && isNaN(endDate!.getTime())) return next(new ClientError("Invalid 'end' date format."));
+    const endDate = end ? new Date(end.toString()) : undefined;
+    if (end && isNaN(endDate!.getTime()))
+      return next(new ClientError("Invalid 'end' date format."));
 
-  const startStr = start.toString().split("T")[0]!;
-  const endStr = end ? end.toString().split("T")[0]! : startStr;
+    const startStr = start.toString().split("T")[0]!;
+    const endStr = end ? end.toString().split("T")[0]! : startStr;
 
-  const federationId = GROUP_TO_FEDERATION[groupId];
+    const federationId = GROUP_TO_FEDERATION[groupId];
 
-  try {
-    if (federationId) {
-      try {
-        console.log(`[POST] Fetching ${groupId} (${federationId})`);
-        const events = await fetchViaPost(federationId, startStr, endStr);
-        return res.status(200).json(events);
-      } catch (postError) {
-        console.warn(`[POST] Failed for ${groupId}, falling back to iCal. Error: ${postError}`);
+    try {
+      if (federationId) {
+        try {
+          console.log(`[POST] Fetching ${groupId} (${federationId})`);
+          const events = await fetchViaPost(federationId, startStr, endStr);
+          return res.status(200).json(events);
+        } catch (postError) {
+          console.warn(
+            `[POST] Failed for ${groupId}, falling back to iCal. Error: ${postError}`,
+          );
+        }
+      } else {
+        console.warn(
+          `[MAP] No federationId for "${groupId}", using iCal directly.`,
+        );
       }
-    } else {
-      console.warn(`[MAP] No federationId for "${groupId}", using iCal directly.`);
-    }
 
-    console.log(`[iCal] Fetching ${groupId}`);
-    const events = await fetchViaIcal(groupId, startDate, endDate);
-    return res.status(200).json(events);
-  } catch (error) {
-    next(error);
-  }
-});
+      console.log(`[iCal] Fetching ${groupId}`);
+      const events = await fetchViaIcal(groupId, startDate, endDate);
+      return res.status(200).json(events);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Ping
@@ -526,11 +563,15 @@ app.post("/ping", (_req, res) => {
 // ---------------------------------------------------------------------------
 app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof AppError) {
-    console.error(`[${req.method} ${req.path}] AppError ${err.statusCode}: ${err.message}`);
+    console.error(
+      `[${req.method} ${req.path}] AppError ${err.statusCode}: ${err.message}`,
+    );
     return res.status(err.statusCode).json({ error: err.message });
   }
   console.error(err.stack);
-  res.status(500).json({ error: "An unexpected internal server error occurred." });
+  res
+    .status(500)
+    .json({ error: "An unexpected internal server error occurred." });
 });
 
 // ---------------------------------------------------------------------------
